@@ -2,13 +2,14 @@ import configparser
 from pprint import pprint
 import sys
 import logging
-from datetime import datetime, timedelta, date
-from twitch.api import v3
+from datetime import datetime, timedelta, date, timezone
 import urllib.request
 import json
 import praw
 import re
 import reddit
+import feedparser
+import pytz
 try:
    import xi
 except ImportError:
@@ -26,12 +27,12 @@ logmsg = logging.getLogger("Rotating_Log")
 ### Outputs debug messages ###
 def debug_msg(debug_str):
    if config['DEFAULT'].getboolean('DebugMode'):
-      print("   <<<- [DEBUG]")
+      print("   <<<- [DEBUG INFO]")
       if debug_str:
          pprint(debug_str)
       else:
          print("[WARNING] debug_msg: No data.")
-      print("   [DEBUG] ->>>")
+      print("    ->>>")
 
 
 ### Send us a modmail to alert something ###
@@ -74,33 +75,14 @@ def calc_countdown(targetdate):
       else:
          countdown_str = "Arrived"
       return countdown_str
-   except:
+   except Exception as e:
       logmsg.critical("[ERROR] Unable to calculate countdown: %s", e)
       return "?"
 
 
-### Get list of Twitch streams ###
-def get_twitch_streams(gamename):
-   return "" # temp disabled while broken
-   #twitch_body = ""
-   #twitch_data = v3.streams.all(game=gamename)
-   #twitch_list = twitch_data['streams']
-   #ct = 0
-   #for a in twitch_list:
-   #   viewers = a['viewers']
-   #   twitch_dat = a['channel']
-   #   twitch_body = twitch_body + '\n* [' + twitch_dat['display_name'] + '](' + twitch_dat['url'] + ')'
-   #   twitch_body = twitch_body + ' ^((' + str(viewers) + ' viewers)^)'
-   #   ct = ct + 1
-   #   if ct >= int(config['DEFAULT']['ItemLimit'])*3:
-   #      break
-   #if config['DEFAULT'].getboolean('DebugMode'):
-   #   debug_msg(twitch_body)
-   #return twitch_body
-
-
 ### Get member count for a Discord server ###
 def get_discord_online(id):
+   debug_msg("Discord: " + str(id))
    discord = "https://discordapp.com/api/guilds/"+id+"/widget.json"
    uagent = config['DEFAULT']['UserAgent']
    req = urllib.request.Request(
@@ -110,7 +92,10 @@ def get_discord_online(id):
            'User-Agent': uagent
        }
    )
-   f = urllib.request.urlopen(req)
+   try:
+      f = urllib.request.urlopen(req)
+   except Exception as e:
+      logmsg.critical("[ERROR] Failed to obtain Discord info: %s.  %s", str(req), e)
    data = f.read()
    encoding = f.info().get_content_charset('utf-8')
    objects3 = json.loads(data.decode(encoding))
@@ -129,48 +114,59 @@ def sync_sidebar_widget(sub):
    sync_split = syncdata.split('####')
    for s_item in sync_split:
       if s_item:
-         dynamic_content = None
-         s_data = s_item.split('\r\n',1)
-         headerfull = s_data[0]
-         header_parts = headerfull.split('|')
-         if len(header_parts) > 1:
-            header_arg = header_parts[1]
-         if len(header_parts) > 2:
-            header_arg2 = header_parts[2]
-         header = header_parts[0]
-         title = header.replace("_"," ")
-         sync_body = s_data[1]
-         sync_body = sync_body.rstrip()
-         header_rep = "%%"+header+"%%"
-         sidebar_segment = sync_body
-         if header == "Twitch_Streams":
-            dynamic_content = get_twitch_streams(header_arg)
-         elif header == "Discord_Info":
-            dynamic_content = str(get_discord_online(header_arg))
-         elif header == "Countdown":
-            timer_ct = 0
-            if timer_ct < int(config['DEFAULT']['NumCountdownLimit']):
-               dynamic_content = calc_countdown(header_arg)
-               timer_ct += 1
-               title = header_arg2.replace("_"," ")
-         elif header == "Server_Status":
-            dynamic_content = handle_server_status(sub)
-         elif header == "Latest_Topics" or header == "Topics":
-            dynamic_content = handle_latest_blogs(sub, 'topics')
-         elif header == "Server_News":
-            dynamic_content = handle_latest_blogs(sub, 'news')
-         elif header == "Notices":
-            dynamic_content = handle_latest_blogs(sub, 'notices')
-         elif header == "Maintenance":
-            dynamic_content = handle_latest_blogs(sub, 'maintenance')
-         if dynamic_content:
-            new_sidebar = new_sidebar.replace(sidebar_segment,dynamic_content)
-         else:
-            new_sidebar = new_sidebar.replace(header_rep,sidebar_segment)
-         if dynamic_content:
-            update_widget(sub, title, dynamic_content)
-         else:
-            update_widget(sub, title, sidebar_segment)
+         try:
+            dynamic_content = None
+            debug_msg(s_item)
+            s_data = s_item.split('\n',1)
+            headerfull = s_data[0].replace("\r","")
+            header_parts = headerfull.split('|')
+            if len(header_parts) > 1:
+               header_arg = header_parts[1]
+            if len(header_parts) > 2:
+               header_arg2 = header_parts[2]
+            header = header_parts[0]
+            title = header.replace("_"," ")
+            sync_body = s_data[1]
+            sync_body = sync_body.rstrip()
+            header_rep = "%%"+header+"%%"
+            sidebar_segment = sync_body
+            if header == "Twitch_Streams":
+               dynamic_content = ""
+            elif header == "Discord_Info":
+               dynamic_content = str(get_discord_online(header_arg))
+            elif header == "Countdown":
+               timer_ct = 0
+               if timer_ct < int(config['DEFAULT']['NumCountdownLimit']):
+                  dynamic_content = calc_countdown(header_arg)
+                  timer_ct += 1
+                  title = header_arg2.replace("_"," ")
+            elif header == "Server_Status":
+               dynamic_content = handle_server_status(sub)
+            elif header == "Latest_Topics" or header == "Topics":
+               dynamic_content = handle_latest_blogs(sub, 'topics')
+            elif header == "Server_News":
+               dynamic_content = handle_latest_blogs(sub, 'news')
+            elif header == "Notices":
+               dynamic_content = handle_latest_blogs(sub, 'notices')
+            elif header == "Maintenance":
+               dynamic_content = handle_latest_blogs(sub, 'maintenance')
+            elif header == "RSS_Feed":
+               feeditems = get_rss_items(header_arg, int(config['DEFAULT']['ItemLimit']))
+               feedstr = ""
+               for i in feeditems:
+                  feedstr += ">* [" + i['title'] + "](" + i['link'] + ")\n"
+               dynamic_content = feedstr
+            if dynamic_content:
+               new_sidebar = new_sidebar.replace(sidebar_segment,dynamic_content)
+            else:
+               new_sidebar = new_sidebar.replace(header_rep,sidebar_segment)
+            if dynamic_content:
+               update_widget(sub, title, dynamic_content)
+            else:
+               update_widget(sub, title, sidebar_segment)
+         except Exception as e:
+            logmsg.critical("[ERROR] Failed to parse sync data: %s.  %s", s_data, e)
+
    return new_sidebar
 
 
@@ -183,7 +179,7 @@ def update_widget(sub, widgetname, newcontent):
       styledata = None
       if isinstance(widget, praw.models.CommunityList):
          clist = []
-         sublist = newcontent.split('\r\n')
+         sublist = newcontent.split('\n')
          for subitem in sublist:
             subname = subitem.replace("*","").lstrip()
             subname = subname.replace("r/","")
@@ -251,3 +247,53 @@ def get_server_status_style(sub, status, which):
          else:
             styledata = {'headerColor': '#014980', 'backgroundColor': '#ffeb9b' }
          return styledata
+
+
+### Determine if sidebar has been updated since last bot run ###
+def bool_sidebar_queued(sub):
+   if config['DEFAULT'].getboolean('DynamicContent'):
+      debug_msg("Sidebar always needs update due to dynamic content, will run bot.")
+      return True
+   username = reddit.reddit.user.me().name
+   for log in sub.mod.log(limit=1,mod=username):
+       latest_run = log.created_utc
+       break
+   for item in sub.wiki['sidebar'].revisions():
+      sidebar_time = item['timestamp']
+      break
+   if sidebar_time > latest_run:
+      debug_msg("Sidebar appears to need an update, will run bot.")
+      return True
+   for item2 in sub.wiki['sidebar_sync'].revisions():
+      sidebarsync_time = item2['timestamp']
+      break
+   if sidebarsync_time > latest_run:
+      debug_msg("Sidebar appears to need an update, will run bot.")
+      return True
+
+   return False
+
+
+### Gets a feed (RSS, Atom) and returns number of items from it up to item_limit. Returns a list obj, no formatting involved. ###
+def get_rss_items(url, item_limit):
+   feed = feedparser.parse(url)
+   return feed.entries[0:item_limit]
+
+
+### Posts new items from a feed to the subreddit ###
+def post_rss_links(sub, feed, datestr, time_zone):
+   dateobj = datetime.strptime(feed[0]['date'], datestr)
+   tzone = pytz.timezone(time_zone)
+   dateobj = tzone.localize(dateobj)
+   dateobj = dateobj.astimezone(tz=None)
+   title = feed[0]['title']
+   link = feed[0]['link']
+   configname = 'SysLastRun' + sub
+   lastrunstr = config['DEFAULT'][configname]
+   lastrunobj = datetime.strptime(lastrunstr, config['DEFAULT']['lastrunformat']).astimezone(tz=None)
+   debug_msg(lastrunobj)
+   debug_msg(title+": ")
+   debug_msg(dateobj)
+   if lastrunobj < dateobj:
+      debug_msg("Newer RSS item, posting!")
+      reddit.reddit.subreddit(sub).submit(title, url=link)

@@ -2,7 +2,7 @@
 
 Sync Companion is a Reddit bot that helps reduce moderator workload with subreddit automation and synchronizing the sidebar with widgets. It is provided as an open source bot for your own hosting.
 
-Want to suggest an improvement or report a bug? Submit an [issue](https://github.com/zeno-mcdohl/sync-companion/issues). If you're seeking to submit changes, just open a Pull Request.
+Want to suggest an improvement or report a bug? Submit an [issue](https://github.com/zeno-mcdohl/sync-companion/issues), or vote on an existing issue using reactions. If you're seeking to submit changes, just open a Pull Request.
 
 --------------
 
@@ -120,6 +120,12 @@ The following items can be defined in the *sidebar_sync* wiki page to provide dy
 ```
 ####Countdown|2019-12-19 14:00:00|Meetup_starts_at
 %%CTDOWN%%
+```
+
+* **RSS_Feed**: Provides a list of items or links from a RSS feed. Security consideration: The URL should be trusted and the *sidebar_sync* wiki page should be ensured it is private to moderators only, and the moderators are trusted individuals. The 2nd argument is the URL to the RSS feed (.rss, .xml, etc). Example:
+```
+####RSS_Feed|http://www.playonline.com/ff11us/polnews/news.xml
+%%RSST%%
 ```
 
 ### config.ini
